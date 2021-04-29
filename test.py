@@ -7,7 +7,7 @@ import scipy
 from tqdm import tqdm
 
 tf.enable_eager_execution()
-DEVICE = '/gpu:0'
+DEVICE = '/cpu:0'
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # the grid should be 2^n-1

@@ -4,9 +4,12 @@ import tensorflow as tf
 import argparse
 import random
 import string
+import model
 from utils import Utils
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
+from model import PNetwork
+import blackbox
 
 tf.enable_eager_execution()
 
@@ -25,8 +28,107 @@ with tf.device(DEVICE):
     optimizer = tf.train.AdamOptimizer(lr)
 
 
-def loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase="Training", epoch=-1, grid_size=8,
+def black_box_loss(black_box_P, n, A_matrices, S_matrices, grid_size=8) -> np.float64:
+    A_matrices = tf.conj(A_matrices)
+    S_matrices = tf.conj(S_matrices)
+    pi = tf.constant(np.pi)
+    theta_x = np.array(([i * 2 * pi / n for i in range(-n // (grid_size * 2) + 1, n // (grid_size * 2) + 1)]))
+    P_matrix = utils.compute_p2LFA(black_box_P, n, grid_size)
+    P_matrix = tf.transpose(P_matrix, [2, 0, 1, 3, 4])
+    P_matrix_t = tf.transpose(P_matrix, [0, 1, 2, 4, 3], conjugate=True)
+    A_c = tf.matmul(tf.matmul(P_matrix_t, A_matrices), P_matrix)
+
+    index_to_remove = len(theta_x) * (-1 + n // (2 * grid_size)) + n // (2 * grid_size) - 1
+    A_c = tf.reshape(A_c, (-1, int(theta_x.shape[0]) ** 2, (grid_size // 2) ** 2, (grid_size // 2) ** 2))
+    A_c_removed = tf.concat([A_c[:, :index_to_remove], A_c[:, index_to_remove + 1:]], 1)
+    P_matrix_t_reshape = tf.reshape(P_matrix_t,
+                                    (-1, int(theta_x.shape[0]) ** 2, (grid_size // 2) ** 2, grid_size ** 2))
+    P_matrix_reshape = tf.reshape(P_matrix,
+                                  (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, (grid_size // 2) ** 2))
+    A_matrices_reshaped = tf.reshape(A_matrices,
+                                     (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, grid_size ** 2))
+    A_matrices_removed = tf.concat(
+        [A_matrices_reshaped[:, :index_to_remove], A_matrices_reshaped[:, index_to_remove + 1:]], 1)
+
+    P_matrix_removed = tf.concat(
+        [P_matrix_reshape[:, :index_to_remove], P_matrix_reshape[:, index_to_remove + 1:]], 1)
+    P_matrix_t_removed = tf.concat(
+        [P_matrix_t_reshape[:, :index_to_remove], P_matrix_t_reshape[:, index_to_remove + 1:]], 1)
+
+    A_coarse_inv_removed = tf.matrix_solve(A_c_removed, P_matrix_t_removed)
+
+    CGC_removed = tf.eye(grid_size ** 2, dtype=tf.complex128) \
+                  - tf.matmul(tf.matmul(P_matrix_removed, A_coarse_inv_removed), A_matrices_removed)
+    S_matrices_reshaped = tf.reshape(S_matrices,
+                                     (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, grid_size ** 2))
+    S_removed = tf.concat(
+        [S_matrices_reshaped[:, :index_to_remove], S_matrices_reshaped[:, index_to_remove + 1:]], 1)
+    iteration_matrix = tf.matmul(tf.matmul(CGC_removed, S_removed), S_removed)
+    loss_test = tf.reduce_mean(tf.reduce_mean(tf.reduce_sum(tf.square(tf.abs(iteration_matrix)), [2, 3]), 1))
+    return loss_test.numpy()
+
+
+def loss(predicted_P_stencil, n, A_matrices, S_matrices, phase="Training", epoch=-1,
+         grid_size=8,
          remove=True):
+    A_matrices = tf.conj(A_matrices)
+    S_matrices = tf.conj(S_matrices)
+    pi = tf.constant(np.pi)
+    theta_x = np.array(([i * 2 * pi / n for i in range(-n // (grid_size * 2) + 1, n // (grid_size * 2) + 1)]))
+    assert (not (phase == "Test" and epoch == 0))  # Then you should be calling black_box_loss
+
+    P_matrix = utils.compute_p2LFA(predicted_P_stencil, n, grid_size)
+
+    P_matrix = tf.transpose(P_matrix, [2, 0, 1, 3, 4])
+    P_matrix_t = tf.transpose(P_matrix, [0, 1, 2, 4, 3], conjugate=True)
+
+    A_c = tf.matmul(tf.matmul(P_matrix_t, A_matrices), P_matrix)
+    index_to_remove = len(theta_x) * (-1 + n // (2 * grid_size)) + n // (2 * grid_size) - 1
+    A_c = tf.reshape(A_c, (-1, int(theta_x.shape[0]) ** 2, (grid_size // 2) ** 2, (grid_size // 2) ** 2))
+    A_c_removed = tf.concat([A_c[:, :index_to_remove], A_c[:, index_to_remove + 1:]], 1)
+    P_matrix_t_reshape = tf.reshape(P_matrix_t,
+                                    (-1, int(theta_x.shape[0]) ** 2, (grid_size // 2) ** 2, grid_size ** 2))
+    P_matrix_reshape = tf.reshape(P_matrix,
+                                  (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, (grid_size // 2) ** 2))
+    A_matrices_reshaped = tf.reshape(A_matrices,
+                                     (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, grid_size ** 2))
+    A_matrices_removed = tf.concat(
+        [A_matrices_reshaped[:, :index_to_remove], A_matrices_reshaped[:, index_to_remove + 1:]], 1)
+
+    P_matrix_removed = tf.concat(
+        [P_matrix_reshape[:, :index_to_remove], P_matrix_reshape[:, index_to_remove + 1:]], 1)
+    P_matrix_t_removed = tf.concat(
+        [P_matrix_t_reshape[:, :index_to_remove], P_matrix_t_reshape[:, index_to_remove + 1:]], 1)
+    A_coarse_inv_removed = tf.matrix_solve(A_c_removed, P_matrix_t_removed)
+
+    CGC_removed = tf.eye(grid_size ** 2, dtype=tf.complex128) \
+                  - tf.matmul(tf.matmul(P_matrix_removed, A_coarse_inv_removed), A_matrices_removed)
+    S_matrices_reshaped = tf.reshape(S_matrices,
+                                     (-1, int(theta_x.shape[0]) ** 2, grid_size ** 2, grid_size ** 2))
+    S_removed = tf.concat(
+        [S_matrices_reshaped[:, :index_to_remove], S_matrices_reshaped[:, index_to_remove + 1:]], 1)
+    iteration_matrix_all = tf.matmul(tf.matmul(CGC_removed, S_removed), S_removed)
+
+    if remove:
+        if phase != 'Test':
+            iteration_matrix = iteration_matrix_all
+            for _ in range(0):
+                iteration_matrix = tf.matmul(iteration_matrix_all, iteration_matrix_all)  # Will never be executed!
+        else:
+            iteration_matrix = iteration_matrix_all
+        loss = tf.reduce_mean(
+            tf.reduce_max(tf.pow(tf.reduce_sum(tf.square(tf.abs(iteration_matrix)), [2, 3]), 1), 1))
+    else:
+        loss = tf.reduce_mean(
+            tf.reduce_mean(tf.reduce_sum(tf.square(tf.abs(iteration_matrix_all)), [2, 3]), 1))
+
+        print("Real loss: ", loss.numpy())
+    real_loss = loss.numpy()
+    return loss, real_loss
+
+
+def old_loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase="Training", epoch=-1, grid_size=8,
+             remove=True):
     with tf.device(DEVICE):
         A_matrices = tf.conj(A_matrices)
         S_matrices = tf.conj(S_matrices)
@@ -34,7 +136,7 @@ def loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase
         theta_x = np.array(([i * 2 * pi / n for i in range(-n // (grid_size * 2) + 1, n // (grid_size * 2) + 1)]))
     with tf.device(DEVICE):
         if phase == "Test" and epoch == 0:
-            P_stencil = model(A_stencil, True)
+            P_stencil = model(A_stencil, black_box=True)
             P_matrix = utils.compute_p2LFA(P_stencil, n, grid_size)
             P_matrix = tf.transpose(P_matrix, [2, 0, 1, 3, 4])
             P_matrix_t = tf.transpose(P_matrix, [0, 1, 2, 4, 3], conjugate=True)
@@ -68,6 +170,7 @@ def loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase
             iteration_matrix = tf.matmul(tf.matmul(CGC_removed, S_removed), S_removed)
             loss_test = tf.reduce_mean(tf.reduce_mean(tf.reduce_sum(tf.square(tf.abs(iteration_matrix)), [2, 3]), 1))
             return tf.constant([0.]), loss_test.numpy()
+
         if index is not None:
             P_stencil = model(A_stencil, index=index, pos=pos, phase=phase)
         else:
@@ -110,7 +213,8 @@ def loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase
                 if phase != 'Test':
                     iteration_matrix = iteration_matrix_all
                     for _ in range(0):
-                        iteration_matrix = tf.matmul(iteration_matrix_all, iteration_matrix_all)
+                        iteration_matrix = tf.matmul(iteration_matrix_all,
+                                                     iteration_matrix_all)  # Will never be executed!
                 else:
                     iteration_matrix = iteration_matrix_all
                 loss = tf.reduce_mean(
@@ -124,17 +228,22 @@ def loss(model, n, A_stencil, A_matrices, S_matrices, index=None, pos=-1., phase
             return loss, real_loss
 
 
-def grad(model, n, A_stencil, A_matrices, S_matrices, phase="Training", epoch=-1, grid_size=8, remove=True):
+def grad(model: PNetwork, output_transforms, n, transformed_inputs, original_inputs, A_matrices, S_matrices, phase="Training", epoch=-1,
+         grid_size=8, remove=True):
+    real_loss = np.float64(0.)
     with tf.GradientTape() as tape:
-        loss_value, real_loss = loss(model, n, A_stencil, A_matrices, S_matrices,
-                                     phase=phase, epoch=epoch, grid_size=grid_size, remove=remove)
+        with tf.device(DEVICE):
+            prediction = model(transformed_inputs)
+            predicted_P_stencil = output_transforms(original_inputs, grid_size, prediction, phase=phase)
+            loss_value, real_loss = loss(predicted_P_stencil, n, A_matrices, S_matrices,
+                                         phase=phase, epoch=epoch, grid_size=grid_size, remove=remove)
     return tape.gradient(loss_value, m.variables), real_loss
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--verbose', action='store_true', help="")
-    parser.add_argument('--use-gpu', action='store_true', default=True, help="")
+    parser.add_argument('--use-gpu', action='store_true', default=False, help="")
     parser.add_argument('--grid-size', default=8, type=int, help="")
     parser.add_argument('--batch-size', default=32, type=int, help="")
     parser.add_argument('--n-epochs', default=2, type=int, help="")
@@ -143,7 +252,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.use_gpu:
-        DEVICE = "/cpu:0"
+        DEVICE = "/gpu:0"
 
     utils = Utils(grid_size=args.grid_size, device=DEVICE, bc=args.bc)
 
@@ -151,15 +260,17 @@ if __name__ == "__main__":
     run_name = f"regularization_grid_size={args.grid_size}_batch_size={args.batch_size}_{random_string}"
     writer = SummaryWriter(log_dir='runs/' + run_name)
 
-    if args.bc == 'periodic':
-        from model_periodicBC import Pnetwork
-    else:
-        from model_dirichletBC import Pnetwork
+    periodic: bool = args.bc == 'periodic'
+    input_transforms = model.periodic_input_transform if periodic else model.dirichlet_input_transform
+    output_transforms = model.periodic_output_transform if periodic else model.dirichlet_output_tranform
 
-    # define network
-    m = Pnetwork(grid_size=grid_size, device=DEVICE)
+    m = None
+    with tf.device(DEVICE):
+        m = PNetwork()
 
     root = tf.train.Checkpoint(optimizer=optimizer, model=m, optimizer_step=tf.train.get_or_create_global_step())
+
+    blackbox_model = blackbox.black_box_periodic_output_transform if periodic else blackbox.black_box_dirichlet_output_transform
 
     with tf.device(DEVICE):
         pi = tf.constant(np.pi)
@@ -192,9 +303,9 @@ if __name__ == "__main__":
             print("epoch: {}".format(epoch))
             order = np.random.permutation(num_training_samples)
 
-            _, blackbox_test_loss = grad(model=m, n=n_test, A_stencil=A_stencils_test,
-                                         A_matrices=A_matrices_test, S_matrices=S_matrices_test,
-                                         phase="Test", epoch=0, grid_size=grid_size)
+            with tf.device(DEVICE):
+                blackbox_P = blackbox_model(A_stencils_test, grid_size)
+                blackbox_test_loss = black_box_loss(blackbox_P, n_test, A_matrices_test, S_matrices_test, grid_size)
 
             if epoch % 1 == 0:  # change to save once every X epochs
                 root.save(file_prefix=checkpoint_prefix)
@@ -213,12 +324,18 @@ if __name__ == "__main__":
                     A_stencils_tensor = tf.convert_to_tensor(A_stencils[idx], dtype=tf.double)
                     A_matrices_tensor = tf.convert_to_tensor(A_matrices, dtype=tf.complex128)
                     S_matrices_tensor = tf.convert_to_tensor(S_matrices, dtype=tf.complex128)
+                    transformed_inputs = input_transforms(A_stencils_tensor, grid_size)
 
-                _, blackbox_train_loss = grad(m, n_train, A_stencils_tensor, A_matrices_tensor, S_matrices_tensor,
-                                              epoch=0,
-                                              grid_size=grid_size, remove=True, phase="Test")
-                grads, real_loss = grad(m, n_train, A_stencils_tensor, A_matrices_tensor,
-                                        S_matrices_tensor, grid_size=grid_size, remove=True, phase="p")
+                    blackbox_P = blackbox_model(A_stencils_tensor, grid_size)
+                    blackbox_train_loss = black_box_loss(blackbox_P, n_train, A_matrices, S_matrices, grid_size)
+
+                    grads, real_loss = grad(model=m,
+                                            output_transforms=output_transforms,
+                                            transformed_inputs=transformed_inputs,
+                                            original_inputs=A_stencils_tensor,
+                                            n=n_train,
+                                            A_matrices=A_matrices_tensor,
+                                            S_matrices=S_matrices_tensor, grid_size=grid_size, remove=True, phase="p")
                 writer.add_scalar('loss', real_loss, numiter)
                 writer.add_scalar('blackbox_train_loss', blackbox_train_loss, numiter)
                 writer.add_scalar('blackbox_test_loss', blackbox_test_loss, numiter)

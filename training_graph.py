@@ -1,6 +1,6 @@
 import os
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import argparse
 import random
 import string
@@ -8,7 +8,7 @@ from utils import Utils
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
-tf.enable_eager_execution()
+tf.disable_v2_behavior()
 
 DEVICE = "/cpu:0"
 
@@ -134,7 +134,7 @@ def grad(model, n, A_stencil, A_matrices, S_matrices, phase="Training", epoch=-1
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--verbose', action='store_true', help="")
-    parser.add_argument('--use-gpu', action='store_true', default=True, help="")
+    parser.add_argument('--use-gpu', action='store_true', default=False, help="")
     parser.add_argument('--grid-size', default=8, type=int, help="")
     parser.add_argument('--batch-size', default=32, type=int, help="")
     parser.add_argument('--n-epochs', default=2, type=int, help="")
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.use_gpu:
-        DEVICE = "/cpu:0"
+        DEVICE = "/gpu:0"
 
     utils = Utils(grid_size=args.grid_size, device=DEVICE, bc=args.bc)
 
