@@ -4,6 +4,7 @@ import tensorflow.compat.v1 as tf
 # takes the partial outputs of either the transformed model output or the blackbox model output and rebuilds into a P matrix STENICL?
 # TODO no idea
 
+@tf.function
 def periodic_post_process(grid_size, down_contributions_output, idx, inputs, left_contributions_output,
                           right_contributions_output, up_contributions_output):
     ones = tf.ones_like(down_contributions_output)
@@ -75,6 +76,7 @@ def periodic_post_process(grid_size, down_contributions_output, idx, inputs, lef
     return tf.to_complex128(output)
 
 
+@tf.function
 def dirichlet_post_process(grid_size, down_contributions_output, idx, inputs, left_contributions_output,
                            right_contributions_output, up_contributions_output):
     ones = tf.ones_like(down_contributions_output)

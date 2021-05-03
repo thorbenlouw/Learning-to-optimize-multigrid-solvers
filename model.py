@@ -2,6 +2,8 @@ import numpy as np
 import tensorflow.compat.v1 as tf
 from postprocess import periodic_post_process, dirichlet_post_process
 
+
+@tf.function
 def dirichlet_input_transform(inputs: tf.Tensor, grid_size: int):
     coarse_grid_size = grid_size // 2
     batch_size = inputs.shape[0]
@@ -51,6 +53,7 @@ def dirichlet_input_transform(inputs: tf.Tensor, grid_size: int):
     return flattened
 
 
+@tf.function
 def periodic_input_transform(inputs: tf.Tensor, grid_size: int) -> tf.Tensor:
     coarse_grid_size = grid_size // 2
     batch_size = inputs.shape[0]
@@ -100,6 +103,7 @@ def periodic_input_transform(inputs: tf.Tensor, grid_size: int) -> tf.Tensor:
     return flattened
 
 
+@tf.function
 def periodic_output_transform(inputs: tf.Tensor, grid_size, model_output, index=None, pos=-1.,
                               phase='Training') -> tf.Tensor:
     idx = [(i - 1) % grid_size for i in range(0, grid_size, 2)]
@@ -144,6 +148,7 @@ def periodic_output_transform(inputs: tf.Tensor, grid_size, model_output, index=
                                  right_contributions_output, up_contributions_output)
 
 
+@tf.function
 def dirichlet_output_tranform(inputs, grid_size, model_output, index=None, pos=-1., phase='Training'):
     idx = [i for i in range(0, grid_size - 1, 2)]
     coarse_grid_size = grid_size // 2
@@ -267,3 +272,41 @@ class PNetwork(tf.keras.Model):
         return x
 
 
+class PNetworkSimple(tf.keras.Model):
+    def __init__(self):
+        super(PNetworkSimple, self).__init__()
+
+        width = 100
+        self.num_layers = 4
+        setattr(self, "dense0", tf.keras.layers.Dense(units=100, use_bias=True,
+                                                      activation='relu',
+                                                      kernel_regularizer=tf.keras.regularizers.l2(1e-7),
+                                                      kernel_initializer='glorot_uniform',
+                                                      bias_initializer='zeros'))
+        setattr(self, "dense1", tf.keras.layers.Dense(units=50, use_bias=True,
+                                                      activation='relu',
+                                                      kernel_regularizer=tf.keras.regularizers.l2(1e-7),
+                                                      kernel_initializer='glorot_uniform',
+                                                      bias_initializer='zeros'))
+        setattr(self, "dense2", tf.keras.layers.Dense(units=30, use_bias=True,
+                                                      activation='relu',
+                                                      kernel_regularizer=tf.keras.regularizers.l2(1e-7),
+                                                      kernel_initializer='glorot_uniform',
+                                                      bias_initializer='zeros'))
+        setattr(self, "dense3", tf.keras.layers.Dense(units=50, use_bias=True,
+                                                      activation='relu',
+                                                      kernel_regularizer=tf.keras.regularizers.l2(1e-7),
+                                                      kernel_initializer='glorot_uniform',
+                                                      bias_initializer='zeros'))
+        self.output_layer = tf.keras.layers.Dense(4, use_bias=True,
+                                                  kernel_regularizer=tf.keras.regularizers.l2(1e-5))
+        self.new_output = tf.Variable(0.5 * tf.random_normal(shape=[2 * 2 * 2 * 8], dtype=tf.float64),
+                                      dtype=tf.float64)
+
+    def call(self, inputs, training=None, mask=None):
+        x = self.dense0(inputs)
+        x = self.dense1(x)
+        x = self.dense2(x)
+        x = self.dense3(x)
+        x = self.output_layer(x)
+        return x

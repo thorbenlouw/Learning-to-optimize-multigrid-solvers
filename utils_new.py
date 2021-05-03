@@ -465,7 +465,7 @@ class Utils(object):
                          callback=error_callback)
         return x, residual_norms, error_norms, solver
 
-    def solve_with_model(self, model: PNetwork, A_matrices, b, initial_guess, input_transforms, output_transforms,
+    def solve_with_model(self, model: tf.keras.Model, A_matrices, b, initial_guess, input_transforms, output_transforms,
                          max_iterations, max_depth=3,
                          w_cycle=False):
         def prolongation_fn(A, args):

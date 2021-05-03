@@ -22,25 +22,21 @@ if __name__ == "__main__":
     parser.add_argument('--boundary', default='dirichlet', type=str, help="")
     parser.add_argument('--compute-spectral-radius', default=False, type=bool, help="")
     parser.add_argument('--bb-row-normalize', default=False, type=bool, help="")
+    parser.add_argument('--simple', action='store_true', default=False, help="Use a simple 4-layer autoencoder instead of 100-deep resnet")
 
     args = parser.parse_args()
 
     num_cycles = 41
     utils = Utils(grid_size=args.grid_size, device=DEVICE, bc=args.boundary)
-    # if args.boundary == 'dirichlet':
-    #     from model_dirichletBC import Pnetwork
-    # else:
-    #     from model_periodicBC import Pnetwork
-    # m = Pnetwork(grid_size=args.grid_size, device=DEVICE)
 
     periodic: bool = args.boundary == 'periodic'
     input_transforms = model.periodic_input_transform if periodic else model.dirichlet_input_transform
     output_transforms = model.periodic_output_transform if periodic else model.dirichlet_output_tranform
 
     with tf.device(DEVICE):
-        m = PNetwork()
+        m = PNetwork() if not args.simple else model.PNetworkSimple()
 
-    checkpoint_dir = './training_dir_new'
+    checkpoint_dir = './training_dir_new' + ('simple' if args.simple else '')
 
     with tf.device(DEVICE):
         lr = tf.Variable([3.4965356e-05])

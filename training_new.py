@@ -8,7 +8,7 @@ import model
 from utils import Utils
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
-from model import PNetwork
+from model import PNetwork, PNetworkSimple
 import blackbox
 
 tf.enable_eager_execution()
@@ -19,8 +19,7 @@ num_training_samples = 10 * 16384
 num_test_samples = 128
 grid_size = 8
 n_test, n_train = 32, 8
-checkpoint_dir = './training_dir_new'
-checkpoint_prefix = os.path.join(checkpoint_dir, 'ckpt')
+
 
 with tf.device(DEVICE):
     lr_ = 1.2e-5
@@ -131,9 +130,7 @@ def loss(predicted_P_stencil, n, A_matrices, S_matrices, phase="Training", epoch
 
 
 
-
-
-def train_step(model: PNetwork, inputs: tf.Tensor,
+def train_step(model: tf.keras.Model, inputs: tf.Tensor,
                output_transforms, original_A_stencils: tf.Tensor, A_matrices: tf.Tensor, S_matrices: tf.Tensor,
                grid_size : int, num_data_points: int):
     blackbox_P = blackbox_model(A_stencils_tensor, grid_size)
@@ -171,8 +168,12 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', default=32, type=int, help="")
     parser.add_argument('--n-epochs', default=2, type=int, help="")
     parser.add_argument('--bc', default='periodic')
+    parser.add_argument('--simple', action='store_true', default=False, help="Use a simple 4-layer autoencoder instead of 100-deep resnet")
 
     args = parser.parse_args()
+
+    checkpoint_dir = './training_dir_new' + ('simple' if args.simple else '')
+    checkpoint_prefix = os.path.join(checkpoint_dir, 'ckpt')
 
     if args.use_gpu:
         DEVICE = "/gpu:0"
@@ -188,7 +189,7 @@ if __name__ == "__main__":
     output_transforms = model.periodic_output_transform if periodic else model.dirichlet_output_tranform
 
     with tf.device(DEVICE):
-        m = PNetwork()
+        m = PNetwork() if not args.simple else PNetworkSimple()
 
     root = tf.train.Checkpoint(optimizer=optimizer, model=m, optimizer_step=tf.train.get_or_create_global_step())
 
