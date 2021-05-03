@@ -1,0 +1,7 @@
+results
+training_dir*
+.idea
+Pipfile.lock
+runs
+.DS_Store
+__pycache__

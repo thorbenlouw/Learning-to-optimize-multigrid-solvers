@@ -145,7 +145,7 @@ def periodic_output_transform(inputs: tf.Tensor, grid_size, model_output, index=
 
 
 def dirichlet_output_tranform(inputs, grid_size, model_output, index=None, pos=-1., phase='Training'):
-    idx = [(i - 1) % grid_size for i in range(0, grid_size, 2)]
+    idx = [i for i in range(0, grid_size - 1, 2)]
     coarse_grid_size = grid_size // 2
     if index is not None:
         indices = tf.constant([[index]])

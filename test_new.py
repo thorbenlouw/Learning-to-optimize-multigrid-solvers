@@ -1,11 +1,15 @@
 import tensorflow as tf
 import numpy as np
-from utils import Utils
 import matplotlib.pyplot as plt
 import argparse
 import scipy
 from tqdm import tqdm
+from model import PNetwork
+import blackbox
+import model
+from utils_new import Utils
 from pathlib import Path
+
 
 Path("results").mkdir(parents=True, exist_ok=True)
 tf.enable_eager_execution()
@@ -23,13 +27,20 @@ if __name__ == "__main__":
 
     num_cycles = 41
     utils = Utils(grid_size=args.grid_size, device=DEVICE, bc=args.boundary)
-    if args.boundary == 'dirichlet':
-        from model_dirichletBC import Pnetwork
-    else:
-        from model_periodicBC import Pnetwork
-    m = Pnetwork(grid_size=args.grid_size, device=DEVICE)
+    # if args.boundary == 'dirichlet':
+    #     from model_dirichletBC import Pnetwork
+    # else:
+    #     from model_periodicBC import Pnetwork
+    # m = Pnetwork(grid_size=args.grid_size, device=DEVICE)
 
-    checkpoint_dir = './training_dir'
+    periodic: bool = args.boundary == 'periodic'
+    input_transforms = model.periodic_input_transform if periodic else model.dirichlet_input_transform
+    output_transforms = model.periodic_output_transform if periodic else model.dirichlet_output_tranform
+
+    with tf.device(DEVICE):
+        m = PNetwork()
+
+    checkpoint_dir = './training_dir_new'
 
     with tf.device(DEVICE):
         lr = tf.Variable([3.4965356e-05])
@@ -55,13 +66,13 @@ if __name__ == "__main__":
         initial = np.random.normal(loc=0.0, scale=1.0, size=args.grid_size ** 2)
         initial = initial[:, np.newaxis]
 
-        _, residual_norms, error_norms, solver = utils.solve_with_model(model=m,
-                                                                        A_matrices=A_matrix, b=b,
-                                                                        initial_guess=initial,
-                                                                        max_iterations=num_cycles,
-                                                                        max_depth=int(np.log2(args.grid_size)) - 1,
-                                                                        blackbox=True,
-                                                                        w_cycle=True)
+
+        # First we do blackbox:
+        _, residual_norms, error_norms, solver = utils.solve_blackbox(A_matrices=A_matrix, b=b, initial_guess=initial, max_iterations=num_cycles,
+                             max_depth=int(np.log2(args.grid_size)) - 1,
+                             w_cycle=True,
+                             periodic=False  #TODO: no! use periodic var
+                             )
         black_box_errors.append(error_norms)
         black_box_residual_norms.append(residual_norms)
         if args.compute_spectral_radius:
@@ -79,11 +90,14 @@ if __name__ == "__main__":
             black_box_spectral_radius = eigs.max()
             black_box_spectral_radii.append(black_box_spectral_radius)
 
+
+        # Now we do inference against trained model:
         x, residual_norms, error_norms, solver = utils.solve_with_model(model=m,
                                                                         A_matrices=A_matrix, b=b, initial_guess=initial,
+                                                                        input_transforms=input_transforms,
+                                                                        output_transforms=output_transforms,
                                                                         max_iterations=num_cycles,
                                                                         max_depth=int(np.log2(args.grid_size)) - 1,
-                                                                        blackbox=False,
                                                                         w_cycle=True)
 
         net_errors.append(error_norms)
@@ -118,6 +132,8 @@ if __name__ == "__main__":
     black_box_errors_std = np.std(black_box_errors, axis=0)
     black_box_errors_div_diff_mean = np.mean(black_box_errors_div_diff, axis=0)
     black_box_errors_div_diff_std = np.std(black_box_errors_div_diff, axis=0)
+
+
 
     plt.figure()
     plt.plot(np.arange(len(net_errors_mean), dtype=np.int), net_errors_mean, label='nn')
