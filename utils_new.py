@@ -386,11 +386,11 @@ class Utils(object):
         A_c = P_matrix_t @ A_matrices @ P_matrix
         return A_c, self.compute_stencil(A_c, (grid_size // 2)), P_matrix, P_matrix_t
 
-    def compute_coarse_matrix_sparse(self, model, A_stencil, A_matrices, grid_size, bb=True):
-        if bb == True:
-            P_stencil = model(inputs=A_stencil, black_box=True)
-        else:
-            P_stencil = model(inputs=A_stencil, black_box=False, phase="Test")
+    def compute_coarse_matrix_sparse(self, model: tf.keras.Model, A_stencils, A_matrices, grid_size,
+                                     input_transforms, output_transforms):
+        transformed_input = input_transforms(A_stencils, grid_size)
+        prediction = model(inputs=transformed_input, training=False)
+        P_stencil = output_transforms(A_stencils, grid_size, model_output=prediction)
         P_matrix = tf.to_double(self.compute_p2_sparse(P_stencil, P_stencil.shape.as_list()[0], grid_size))
         P_matrix_t = tf.sparse_transpose(P_matrix, [0, 2, 1])
         A_matrices = tf.squeeze(A_matrices)
@@ -399,8 +399,9 @@ class Utils(object):
         A_c = tf.transpose(tf.matmul(temp, tf.transpose(q, [0, 2, 1])), [0, 2, 1])
         return A_c, self.compute_stencil(tf.squeeze(A_c), (grid_size // 2)), P_matrix, P_matrix_t
 
-    def create_coarse_training_set(self, m, pi, num_training_samples, bb=False, epsilon_sparse=False):
-        m.grid_size = 16  # instead of 8
+    def create_coarse_training_set(self, m, pi, num_training_samples, input_transforms, output_transforms,
+                                   epsilon_sparse=False):
+        grid_size = 16  # instead of 8
         stencils = []
         additional_num_training_samples = num_training_samples
         theta_x = np.array(
@@ -419,7 +420,7 @@ class Utils(object):
             A_stencils_temp = tf.convert_to_tensor(A_stencils_[i * batch_size:(i + 1) * batch_size], dtype=tf.double)
             A_matrices__temp = tf.convert_to_tensor(A_matrices_, dtype=tf.complex128)
             A_c, A_c_stencil, _, _ = self.compute_coarse_matrix_sparse(m, A_stencils_temp, A_matrices__temp, 16,
-                                                                       bb=bb)
+                                                                       input_transforms, output_transforms)
             A_c_stencil = A_c_stencil.numpy()
             stencils.append(A_c_stencil)
         m.grid_size = 8

@@ -5,7 +5,7 @@ import argparse
 import random
 import string
 import model
-from utils import Utils
+from utils_new import Utils
 from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from model import PNetwork, PNetworkSimple
@@ -16,10 +16,10 @@ tf.enable_eager_execution()
 DEVICE = "/cpu:0"
 
 num_training_samples = 10 * 16384
+# num_training_samples = 128
 num_test_samples = 128
 grid_size = 8
 n_test, n_train = 32, 8
-
 
 with tf.device(DEVICE):
     lr_ = 1.2e-5
@@ -129,10 +129,9 @@ def loss(predicted_P_stencil, n, A_matrices, S_matrices, phase="Training", epoch
     return loss, real_loss
 
 
-
 def train_step(model: tf.keras.Model, inputs: tf.Tensor,
                output_transforms, original_A_stencils: tf.Tensor, A_matrices: tf.Tensor, S_matrices: tf.Tensor,
-               grid_size : int, num_data_points: int):
+               grid_size: int, num_data_points: int):
     blackbox_P = blackbox_model(A_stencils_tensor, grid_size)
     blackbox_train_loss = black_box_loss(blackbox_P, n_train, A_matrices, S_matrices, grid_size)
 
@@ -156,9 +155,9 @@ def train_step(model: tf.keras.Model, inputs: tf.Tensor,
                             S_matrices=S_matrices,
                             grid_size=grid_size, remove=True, phase="p")
     writer.add_scalar('loss', real_loss, numiter)
-    writer.add_scalar('blackbox_train_loss', blackbox_train_loss, numiter)
-    writer.add_scalar('blackbox_test_loss', blackbox_test_loss, numiter)
     optimizer.apply_gradients(zip(grads, m.variables), tf.train.get_or_create_global_step())
+    return real_loss
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -168,7 +167,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch-size', default=32, type=int, help="")
     parser.add_argument('--n-epochs', default=2, type=int, help="")
     parser.add_argument('--bc', default='periodic')
-    parser.add_argument('--simple', action='store_true', default=False, help="Use a simple 4-layer autoencoder instead of 100-deep resnet")
+    parser.add_argument('--simple', action='store_true', default=False,
+                        help="Use a simple 4-layer autoencoder instead of 100-deep resnet")
 
     args = parser.parse_args()
 
@@ -209,11 +209,13 @@ if __name__ == "__main__":
                                      (-1, num_of_modes, num_of_modes, grid_size ** 2, grid_size ** 2))
 
     A_stencils_train = np.array(utils.two_d_stencil(num_training_samples))
+
     n_train_list = [16, 16, 32]
     initial_epsi = 1e-0
 
     numiter = -1
-    for j in range(len(n_train_list)):
+    for training_phase, j in enumerate(range(len(n_train_list))):
+        print("Training phase {} of {}".format(training_phase + 1, len(n_train_list)))
         A_stencils = A_stencils_train.copy()
         n_train = n_train_list[j]
 
@@ -229,9 +231,8 @@ if __name__ == "__main__":
             with tf.device(DEVICE):
                 blackbox_P = blackbox_model(A_stencils_test, grid_size)
                 blackbox_test_loss = black_box_loss(blackbox_P, n_test, A_matrices_test, S_matrices_test, grid_size)
-
-            if epoch % 1 == 0:  # change to save once every X epochs
-                root.save(file_prefix=checkpoint_prefix)
+                print("Blackbox test loss: {}".format(blackbox_test_loss))
+                writer.add_scalar('blackbox_test_loss', blackbox_test_loss, numiter)
 
             for iter in tqdm(range(num_training_samples // args.batch_size)):
                 numiter += 1
@@ -249,15 +250,26 @@ if __name__ == "__main__":
                     A_matrices_tensor = tf.convert_to_tensor(A_matrices, dtype=tf.complex128)
                     S_matrices_tensor = tf.convert_to_tensor(S_matrices, dtype=tf.complex128)
                     transformed_inputs = input_transforms(A_stencils_tensor, grid_size)
-                    train_step(model=m, inputs=transformed_inputs, output_transforms=output_transforms,
-                               original_A_stencils=A_stencils_tensor,
-                               A_matrices=A_matrices_tensor, S_matrices=S_matrices_tensor,
-                               grid_size=grid_size,
-                               num_data_points=n_train)
+
+                    blackbox_P = blackbox_model(A_stencils_tensor, grid_size)
+                    blackbox_train_loss = black_box_loss(blackbox_P, n_train, A_matrices_tensor, S_matrices_tensor,
+                                                         grid_size)
+                    writer.add_scalar('blackbox_train_loss', blackbox_train_loss, numiter)
+
+                    last_loss = train_step(model=m, inputs=transformed_inputs, output_transforms=output_transforms,
+                                           original_A_stencils=A_stencils_tensor,
+                                           A_matrices=A_matrices_tensor, S_matrices=S_matrices_tensor,
+                                           grid_size=grid_size,
+                                           num_data_points=n_train)
+            print("Last training loss was {}", last_loss)
+
+            if epoch % 1 == 0:  # change to save once every X epochs
+                root.save(file_prefix=checkpoint_prefix)
+
         # add coarse grid problems:
         if j > 0:
             num_training_samples = num_training_samples // 2
-        temp = utils.create_coarse_training_set(m, pi, num_training_samples)
+        temp = utils.create_coarse_training_set(m, pi, num_training_samples, input_transforms, output_transforms)
         A_stencils_train = np.concatenate(
             [np.array(utils.two_d_stencil(num_training_samples)), temp], axis=0)
         num_training_samples = A_stencils_train.shape[0]
