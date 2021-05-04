@@ -22,9 +22,13 @@ grid_size = 8
 n_test, n_train = 32, 8
 
 with tf.device(DEVICE):
-    lr_ = 1.2e-5
+    global_step = tf.Variable(0, trainable=False)
+    lr_ = 0.1
     lr = tf.Variable(lr_)
-    optimizer = tf.train.AdamOptimizer(lr)
+    decayed_lr = tf.train.exponential_decay(lr_,
+                                            global_step, 10000,
+                                            0.95, staircase=True)
+    optimizer = tf.train.AdamOptimizer(decayed_lr)
 
 
 def black_box_loss(black_box_P, n, A_matrices, S_matrices, grid_size=8) -> np.float64:
@@ -246,6 +250,7 @@ if __name__ == "__main__":
                                         (-1, theta_x.shape[0], theta_x.shape[0], grid_size ** 2, grid_size ** 2))
 
                 with tf.device(DEVICE):
+                    global_step.assign_add(1)
                     A_stencils_tensor = tf.convert_to_tensor(A_stencils[idx], dtype=tf.double)
                     A_matrices_tensor = tf.convert_to_tensor(A_matrices, dtype=tf.complex128)
                     S_matrices_tensor = tf.convert_to_tensor(S_matrices, dtype=tf.complex128)
